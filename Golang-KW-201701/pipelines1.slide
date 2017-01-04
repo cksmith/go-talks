@@ -1,0 +1,170 @@
+Pipelines in Go
+
+KW Go Developers Meetup
+January 10, 2017
+
+Cameron Smith
+Dejero
+
+* What is concurrency? (From a talk by Rob Pike)
+
+Concurrency is the composition of independently executing computations.
+
+Concurrency is a way to structure software, particularly as a way to write clean code that interacts well with the real world.
+
+It is not parallelism, but it enables parallelism (if you have more than one processor core).
+
+* Why is concurrency useful for network services?
+
+- Asynchronous inputs (requests, messages)
+- While processing the inputs, many operations occur that would normally block (database access, remote API calls, etc.)
+- More efficient to be able to process other inputs while waiting on these operations
+
+* What are pipelines?
+
+A design pattern for concurrent data processing
+
+Input data processed through multiple independent stages
+
+Useful for web servers, message processors
+
+Make concurrency easy to work with (avoiding threads, mutexes, locks, condition variables, etc.)
+
+Still provide a lot of control over performance and resource use
+
+* Original title of this talk: Channels and Pipelines
+
+- Not fair to goroutines and select.  These (along with channels) are the key building blocks for concurrency in Go.
+- Let's start with an overview of these features.
+
+* A simple function
+
+Get a programming quote using a web API, print it, then pause for a short, random amount of time.
+
+.play function/main.go /START/,/STOP.*/
+
+* Running it in the background
+
+The "go" keyword runs the function in the background, allowing the caller to continue.
+
+.play goroutines/main.go /^func main/,/^}/
+
+* What are goroutines?
+
+They are functions that execute independently.
+
+They are very cheap. A single program can have thousands, even hundreds of thousands of goroutines.
+
+They start with a small stack size but can grow.
+
+They are not threads.  Go's runtime assigns goroutines to threads as needed so that they all keep running.  By default Go uses one thread per core (as of Go 1.5).  More are spawned if goroutines are blocking in system calls.
+
+They don't prevent the program from exiting.
+
+* Communication
+
+How can goroutines communicate with each other?
+
+For this we need channels.
+
+* Channels
+
+Created using make().
+
+<- operator used to send and receive data over channels.
+
+.play channels/main.go /START1/,/STOP1.*/
+
+* More on channels
+
+<- operator blocks until both the sender and receiver are ready.  Channels thus enable both communication and synchronization.
+
+Can also create buffered channels that don't block until they have queued up a specified number of messages.  This isn't as useful as it sounds though.
+
+Channels are bidirectional but can be restricted to send-only or receive-only when passing them around.
+
+.code channels/main.go /START2/,/STOP2.*/
+
+Go adage: "Don't communicate by sharing memory, share memory by communicating."
+
+* Dealing with multiple channels
+
+Let's say we have two quote generators.
+
+We don't know which channel is going to have data ready to receive first.  Don't want to block.
+
+.play multiple/main.go /START/,/STOP.*/
+
+* Select
+
+The select statement is like a switch statement except each case is a channel operation (send or receive).
+- All of the cases are evaluated.
+- The statement blocks until one of the cases can proceed, then it does.
+- If multiple cases are ready, Go chooses one of them pseudo-randomly.
+- If a default case is provided, it is executed if none of the other cases are ready.
+
+.play select/main.go /START/,/STOP.*/
+
+* Timeout using select
+
+Make the program shut down after five seconds again.
+
+.play select2/main.go /START/,/STOP.*/
+
+* Shutting down
+
+In both test and production environments it's useful for programs to shut down in a deterministic way.
+
+In our examples so far, the goroutines "leak".  The main routine exits and the program shuts down while the goroutines are still running.
+
+Ideally we would signal the goroutines to exit then wait for them to return.
+
+* The obvious way
+
+Pass an input channel to each generator.
+
+.code shutdown1/main.go /START1/,/STOP1.*/
+
+* Cancel each goroutine separately
+
+.play shutdown1/main.go /START2/,/STOP2.*/
+
+* The better way
+
+When a channel is closed a zero message is broadcast to each receiver.
+
+This means we can use the same channel to cancel both goroutines.
+
+.code shutdown2/main.go /START/,/STOP.*/
+
+* Detecting closed channels
+
+Can use for with the range clause to loop over inputs until the channel is closed.
+
+.code closing/main.go /START1/,/STOP1.*/
+
+In a select we can detect the zero value.  Could be ambiguous though.
+
+.code closing/main.go /START2/,/STOP2.*/
+
+Can also optionally receive a value indicating if the channel is still open.
+
+.code closing/main.go /START3/,/STOP3.*/
+
+* We still have a problem
+
+Even though we have signalled the goroutines to exit we should actually wait for them to exit.
+
+Solution: Use sync.WaitGroup
+
+.code waitgroup/main.go /START1/,/STOP1.*/
+
+* Wire up the WaitGroup
+
+.play waitgroup/main.go /START2/,/STOP2.*/
+
+* To be continued
+
+In this meetup we reviewed the building blocks for developing concurrent programs.
+
+Next time we'll see how these can be used to construct pipelines.

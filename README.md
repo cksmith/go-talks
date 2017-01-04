@@ -5,5 +5,5 @@ These slides use the Go present package: https://godoc.org/golang.org/x/tools/pr
 e.g.:
 ```
 > go get golang.org/x/tools/present
-> $GOPATH/bin/present Golang-KW-201701/pipelines.slide
+> $GOPATH/bin/present Golang-KW-201701/pipelines1.slide
 ```

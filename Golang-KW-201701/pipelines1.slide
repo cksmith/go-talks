@@ -16,7 +16,7 @@ It is not parallelism, but it enables parallelism (if you have more than one pro
 
 * Why is concurrency useful for network services?
 
-- Asynchronous inputs (requests, messages)
+- Inputs are requests or messages that are processed by the service
 - While processing the inputs, many operations occur that would normally block (database access, remote API calls, etc.)
 - More efficient to be able to process other inputs while waiting on these operations
 

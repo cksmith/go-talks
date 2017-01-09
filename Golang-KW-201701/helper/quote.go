@@ -1,4 +1,4 @@
-package quote
+package helper
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"strconv"
 )
 
-func Get() (string, error) {
+func GetQuote() (string, error) {
 	resp, err := http.Get("http://quotes.stormconsultancy.co.uk/random.json")
 	if err != nil {
 		return "", err

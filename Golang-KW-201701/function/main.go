@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/cksmith/go-talks/Golang-KW-201701/quote"
+	"github.com/cksmith/go-talks/Golang-KW-201701/helper"
 	"math/rand"
 	"time"
 )
@@ -11,7 +11,7 @@ import (
 
 func quoter() {
 	for i := 0; ; i++ {
-		s, _ := quote.Get()
+		s, _ := helper.GetQuote()
 		fmt.Println(s, i)
 		time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
 	}

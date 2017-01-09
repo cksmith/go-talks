@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/cksmith/go-talks/Golang-KW-201701/quote"
+	"github.com/cksmith/go-talks/Golang-KW-201701/helper"
 	"math/rand"
 	"time"
 )
@@ -11,7 +11,7 @@ func quoter(quit <-chan bool) <-chan string {
 	c := make(chan string)
 	go func() {
 		for i := 0; ; i++ {
-			s, _ := quote.Get()
+			s, _ := helper.GetQuote()
 			select {
 			case c <- fmt.Sprintf("%s %d", s, i):
 				// do nothing

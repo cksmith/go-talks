@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/cksmith/go-talks/Golang-KW-201701/quote"
+	"github.com/cksmith/go-talks/Golang-KW-201701/helper"
 	"math/rand"
 	"time"
 )
@@ -15,7 +15,7 @@ func quoter() <-chan string { // Returns a receive-only channel of strings
 	c := make(chan string) // HL
 	go func() {            // Launch the go-routine inside the function
 		for i := 0; ; i++ {
-			s, _ := quote.Get()
+			s, _ := helper.GetQuote()
 			c <- fmt.Sprintf("%s %d", s, i) // HL
 			time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
 		}

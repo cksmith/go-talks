@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/cksmith/go-talks/Golang-KW-201701/quote"
+	"github.com/cksmith/go-talks/Golang-KW-201701/helper"
 	"math/rand"
 	"sync"
 	"time"
@@ -18,7 +18,7 @@ func quoter(quit <-chan bool, wg *sync.WaitGroup) <-chan string { // HL
 		defer wg.Done()                    // Decrement the WaitGroup counter on exit // HL
 		// STOP1 OMIT
 		for i := 0; ; i++ {
-			s, _ := quote.Get()
+			s, _ := helper.GetQuote()
 			select {
 			case c <- fmt.Sprintf("%s %d", s, i):
 				// do nothing

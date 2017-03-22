@@ -1,0 +1,297 @@
+Pipelines in Go - Part 2
+
+KW Go Developers Meetup
+March 21, 2017
+
+Cameron Smith
+Dejero
+
+* What are pipelines?
+
+A design pattern for concurrent data processing
+
+Input data processed through multiple independent stages
+
+Useful for web servers, message processors
+
+Make concurrency easy to work with (avoiding threads, mutexes, locks, condition variables, etc.)
+
+Still provide a lot of control over performance and resource use
+
+* Last time
+
+Discussed the key building blocks of pipelines and concurrent programs in general - goroutines, channels, and select.
+
+Goroutines - functions that execute independently without blocking the caller
+
+Channels - the way goroutines communicate and synchronize with each other
+
+Select - the way to handle multiple communication operations at the same time
+
+* Quoter program
+
+.code waitgroup/main.go /START1/,/STOP1.*/
+
+* Quoter program continued
+
+.play waitgroup/main.go /START2/,/STOP2.*/
+
+* Simple pipeline architecture
+
+quoter -> printer
+
+quoter has a single output channel
+
+printer has a single input channel
+
+(We'll add another stage later)
+
+* A couple of requirements
+
+Pipelines should shut down cleanly either on demand or if one of the stages encounters a fatal error.  When shutting down on demand, messages already in the pipeline should finish processing.  When a fatal error occurs, existing messages can be dropped on the floor.
+
+Stages should also be easy to unit test.  You get this for free to some degree.
+
+* Conventions
+
+Each stage is a generator that returns its output channel.
+
+Stages accept their input channel as a parameter.
+
+Stages stop processing when the input channel is closed.
+
+Stages are responsible for closing their output channel when they exit.
+
+Prefer passing the same message type between stages.
+
+Challenges:
+- How can downstream stages cause upstream stages to stop?
+- How can we avoid an upstream stage from blocking if the next stage has stopped?
+
+* Go context (standard library package)
+
+According to GoDoc, package context defines the Context type, which carries deadlines, cancelation signals, and other request-scoped values across API boundaries and between processes.
+
+In our case we're using context.Context for cancellation signals for whole pipelines, not individual requests.
+
+.code context/main.go /START1/,/STOP1.*/
+
+Can also define child contexts that are also cancelled when the parent is cancelled.
+
+.code context/main.go /START2/,/STOP2.*/
+
+* Context helper library
+
+Define a derived Context type that also leverages sync.WaitGroup to allow us to wait for the pipeline stages to shut down after the pipeline is cancelled.
+
+.code helper/context.go /START1/,/STOP1.*/
+
+* Helper methods
+
+.code helper/context.go /START2/,/STOP2.*/
+
+* Helper methods cont'd
+
+.code helper/context.go /START3/,/STOP3.*/
+
+* Integrating the helper
+
+Shut down the first stage if the pipeline is cancelled.
+
+.code withhelper/main.go /START1/,/STOP1.*/
+
+* Printer stage
+
+No need to specifically handle the cancel case here.  Just wait for the input channel to close.
+
+.code withhelper/main.go /START2/,/STOP2.*/
+
+* New main routine
+
+Create a Context and pass it into each stage.
+
+.play withhelper/main.go /START3/,/STOP3.*/
+
+* Slightly better
+
+Close an input channel to shut down the pipeline normally.  Reserve cancelling for abnormal situations.
+
+This ensures that messages already in the pipeline are fully processed.
+
+.play withhelper2/main.go /START/,/STOP/
+
+* Add an error condition
+
+The whole pipeline shuts down properly when an error occurs.
+
+.play withhelper3/main.go /START/,/STOP/
+
+* Handling bad inputs
+
+We also need to handle non-fatal errors where the input message is bad or cannot be processed for some reason, but we don't need to shut down the whole pipeline.
+
+In some applications, it may be sufficient to handle these cases in the stages where they occur and simply not pass the message along.  In some cases it's nice to pass them through to a final block that handles errors in a specific way, perhaps responding to the sender.
+
+* Common message type
+
+Define a common message type to be used in all pipeline blocks in the application.  Makes blocks more interchangeable and facilitates adding helper functions.
+
+.code message/main.go /START1/,/STOP1.*/
+
+Add a message sending helper that doesn't block if the downstream block might have stopped due to an error.
+
+.code message/main.go /START2/,/STOP2.*/
+
+* Iteration helper
+
+.code message/main.go /START3/,/STOP3.*/
+
+* Integrating the helper
+
+.code message/main.go /START4/,/STOP4.*/
+
+* Test inputs
+
+This pattern can be extended to allow test messages to be handled, possibly as part of a service health check.
+
+This is a good idea to ensure that none of the stages have deadlocked and can also allow us to measure the latency through the pipeline.
+
+In this case we'll consider test messages to be those with a zero-length quote string.
+
+.code test_message/main.go /START1/,/STOP1.*/
+
+* Passing along test messages
+
+.code test_message/main.go /START2/,/STOP2.*/
+
+* Back to the loop in the first stage
+
+Forward test messages received by the first stage.
+
+Now need to handle the case where the input is closed (which triggers a normal shutdown) and when a message is received.
+
+.code test_message/main.go /START3/,/STOP3.*/
+
+* Outputting a test message from the last stage
+
+Add an output channel.
+
+.code test_message/main.go /START4/,/STOP4.*/
+
+* The main routine revisited
+
+Connect the test input and output channels.
+
+.code test_message/main.go /START5/,/STOP5.*/
+
+* Sending a test message
+
+For demonstration purposes, send a test message after the timer expires.
+
+.play test_message/main.go /START6/,/STOP6.*/
+
+* Adding another stage
+
+Filter out inappropriate quotes using a web API.
+
+.code another_stage/main.go /START1/,/STOP1.*/
+
+* Unit testing the new stage
+
+.code another_stage/filter_test.go /START/,/STOP.*/
+
+* Fan out - fan in
+
+What if one of the stages is a bottleneck?
+
+Can instantiate multiple instances.
+
+Having multiple instances share the same input channel is straightforward.  When an instance is ready it will receive the next message on the channel or block.
+
+Merging the output channels together requires extra code.  Sharing an output channel would make it ambiguous who is responsible for closing the channel on shutdown.
+
+* Merge stage
+
+.code merger/main.go /START1/,/STOP1.*/
+
+* Integrate the merge stage
+
+.play merger/main.go /START2/,/STOP2.*/
+
+* Safe persistent data
+
+As long as a single goroutine is accessing data we don't need special synchronization code.
+
+If multiple stages are sharing data, synchronization code is required.
+
+In many cases this can be avoided.
+
+* Avoiding deadlock
+
+Avoid reading and writing the same channel in the same goroutine.
+
+Also avoid cycles in pipelines.  If the pipeline fills up with messages, deadlock can occur.
+
+To avoid this, ensure that goroutines are always able to service inputs and outputs at the same time via select.
+
+* Deadlock example
+
+.code deadlock1/main.go /START1/,/STOP1.*/
+
+Subscribe stage also returns a channel for sending responses.
+
+.code deadlock1/main.go /START2/,/STOP2.*/
+
+* Simple loop for messages and responses
+
+.code deadlock1/main.go /START3/,/STOP3.*/
+
+* Response stage
+
+The response stage sends responses and closes the response channel on exit.
+
+The stage is effectively taking over ownership of the response channel.
+
+.code deadlock1/main.go /START4/,/STOP4.*/
+
+* Main function
+
+Response stage feeds messages back to the subscribe stage.
+
+.play deadlock1/main.go /START5/,/STOP5.*/
+
+* No deadlock, no problem?
+
+What if messages are sent faster?
+
+.play deadlock2/main.go /START1/,/STOP1.*/
+
+* Deadlock! Why?
+
+Fast messages can fill up the pipeline.  Deadlock can occur if we are attempting to send a message to the next stage at the same time the other stages are sending messages and the last stage is attempting to send a response.
+
+* Solution
+
+Make sure we are always ready to service the response channel.
+
+Expand the channel output to a select.
+
+.play deadlock3/main.go /START1/,/STOP1.*/
+
+Unfortunately there is another problem.
+
+* Deadlock on shutdown
+
+Need to continue to read from the response channel even after the input channel closes.
+
+.code deadlock4/main.go /START1/,/STOP1.*/
+
+* Don't assume the shutdown order
+
+Should also handle the case where the response channel closes first.
+
+.play deadlock4/main.go /START2/,/STOP2.*/
+
+Unfortunately the code gets a bit messy and repetitive.
+
+

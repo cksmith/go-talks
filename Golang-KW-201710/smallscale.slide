@@ -1,0 +1,275 @@
+Small-Scale Go
+
+KW Go Developers Meetup
+October 10, 2017
+
+Cameron Smith
+Keyfree
+
+* What is Keyfree
+
+Technology to enable smartphone-centric car sharing
+
+Removes need to physically exchange keys
+
+On-demand car rentals, peer-to-peer car sharing, corporate fleets
+
+Cloud <-> Mobile App <-> In-Vehicle Device
+
+Bluetooth Low Energy used between the app and device
+
+Internet connection not required to access the car (good for underground, remote areas)
+
+* How this talk came to be
+
+Started working with a testing company in Bangladesh
+
+Inconvenient to ship hardware, update firmware, etc.
+
+Most developers prefer to stay away from hardware
+
+Needed a way to be able to test the app with a simulated device
+
+Also useful for local development and testing (decouples software development from firmware and hardware development)
+
+* The solution
+
+Decided to develop a device simulator in Go
+
+Eventually grew into:
+
+- device simulator
+- set of unit tests that can run against the simulator or a real device
+- command-line tools for provisioning new devices in manufacturing
+- stress tests that can be run against real devices
+
+\...all built into a single executable with multiple subcommands
+
+* Today's hardware setup
+
+Raspberry Pi 3 with several things connected to GPIOs:
+
+- 4 LEDs
+- DHT22 temperature/humidity sensor
+
+* Hello, world for IoT
+
+Many Raspberry Pi libraries that were likely originally developed in Python have made their way to Go
+
+[[https://github.com/stianeikeland/go-rpio][go-rpio]] is available for accessing GPIO pins on the Raspberry Pi
+
+* Initializing GPIOs
+
+.code gpio/main.go /START1 OMIT/,/END1 OMIT/
+.code gpio/main.go /START2 OMIT/,/END2 OMIT/
+
+* Looping through integer values
+
+.code gpio/main.go /START3 OMIT/,/END3 OMIT/
+
+* Cross compiling
+
+Easy when the project is pure Go!
+
+    GOOS=linux GOARCH=arm go build -o gpio main.go
+
+Not so easy when cgo is involved.
+
+Requires a C/C++ toolchain and possibly system header files and libraries.
+
+(Of course you can run Go on the Raspberry Pi directly if you want)
+
+* Building a Bluetooth Low Energy (BLE) app
+
+Will be building both the "client" and "server" parts.
+
+In BLE terms:
+
+- The client is called the *Central*
+- The server is called the *Peripheral*
+
+In our case the Raspberry Pi will ultimately act as the peripheral.
+
+* Abstracting the hardware
+
+Refactor the GPIO LED code into a type with an interface.
+
+.code ble/blelib/led.go /START1 OMIT/,/END1 OMIT/
+
+* Mock implementation
+
+A mock implementation is useful for running tests on a system that doesn't have the real hardware.
+
+.code ble/blelib/led.go /START2 OMIT/,/END2 OMIT/
+
+* Why Mock?
+
+Allows us to run tests on a machine that is not a Raspberry Pi or does not have the GPIOs wired up in the necessary way.
+
+For example:
+
+- Developer machine
+- Jenkins build machine
+
+* Add a temperature/humidity sensor
+
+In sensor.go:
+.code ble/blelib/sensor.go /START1 OMIT/,/END1 OMIT/
+
+* Platform-specific code
+
+Unfortunately, the go-dht library that we're using requires cgo and does not compile on Mac OS X.
+
+Fortunately, go handles platform-specific code fairly well.
+
+- Files with _<platform>.go suffix only build on that platform
+- +build directive at the top of a file specifies more complex rules
+
+* Linux code
+
+In sensor_linux.go:
+.code ble/blelib/sensor_linux.go /START1 OMIT/,/END1 OMIT/
+
+* Stub code for non-Linux platforms
+
+In sensor_stub.go:
+.code ble/blelib/sensor_stub.go
+
+* Introduction to the gatt package
+
+Developed by Paypal. Forked by others (and me) to fix bugs, add features.
+
+https://github.com/cksmith/gatt
+
+Supports Linux and OS X.
+
+Supports implementing central and peripheral devices.
+
+Based on similar node.js libraries (noble and bleno).
+
+* Service implementation
+
+Implement the LED characteristic (supports write operations only)
+.code ble/blelib/service.go /START1 OMIT/,/END1 OMIT/
+
+* 
+
+Implement the sensor characteristic (supports read operations only)
+.code ble/blelib/service.go /START2 OMIT/,/END2 OMIT/
+
+* Server implementation
+
+.code ble/blelib/server.go /START1 OMIT/,/END1 OMIT/
+
+* 
+
+.code ble/blelib/server.go /START2 OMIT/,/END2 OMIT/
+
+* Main function implementation
+
+.code ble/main.go /START1 OMIT/,/END1 OMIT/
+
+* 
+
+.code ble/main.go /START2 OMIT/,/END2 OMIT/
+
+* Demo
+
+Can run the service in "mock" mode on Mac or in "real" mode on Raspberry Pi 3.
+
+Can test with Bluetooth LE tools such as LightBlue for iOS and Android.
+
+* Cross-compiling Mac -> Raspberry Pi 3
+
+.link https://www.jaredwolff.com/toolchains/ Raspberry Pi 3 toolchain for Mac
+
+Built using Crosstool-NG, a toolchain generator that supports many architectures
+
+* Cross-compiling Linux -> Mac
+
+Difficult with gatt because the XPC interprocess communication method that gatt uses to access the Mac Bluetooth APIs requires cgo and Mac SDK headers
+
+Should still be possible though with [[https://github.com/karalabe/xgo][xgo]]
+
+xgo is built on a collection of toolchains and SDKs built into a set of lightweight Linux containers
+
+Haven't tried xgo on a Pi myself but have successfully built Mac/Darwin cgo projects on x86 Linux as part of an automated Jenkins build
+
+* Cross compiling using a Crosstool-NG disk image
+
+To compile for Raspberry Pi 3 on Mac...
+
+Mount the toolchain disk image then:
+
+    GOOS=linux GOARCH=arm CGO_ENABLED=1 \
+    CC=/Volumes/xtools/armv8-rpi3-linux-gnueabihf/bin/armv8-rpi3-linux-gnueabihf-gcc \
+    CXX=/Volumes/xtools/armv8-rpi3-linux-gnueabihf/bin/armv8-rpi3-linux-gnueabihf-g++ \
+    go build -o ble main.go
+
+Needs sudo the first time it's run (installs Go standard library packages under /usr/local)
+
+Requires a case-sensitive file system on Mac (another good reason for a disk image)
+
+* The client (central) side
+
+On initialization the client registers callbacks for PeripheralDiscovered, PeripheralConnected, PeripheralDisconnected events.
+
+The client then initiates a scan, passing in an array of service UUIDs to look for.
+
+Client then may connect to a specific device. Scan should be aborted before connecting to a device (especially on Linux).
+
+After connecting to a device, the client may discover its available services and then the available characteristics and descriptors for a specific service.
+
+Characteristics must be discovered before they can be read or written.
+
+* Client helper methods
+
+.code ble/blelib/client.go /START1 OMIT/,/END1 OMIT/
+
+* Making unit tests run faster
+
+Developed simulated device and peripheral implementations that connect directly to the service without requiring BLE. They expose the same gatt Device and Peripheral interfaces and thus are compatible with the same client code.
+
+This is helpful because it runs faster and doesn't require separate central and peripheral devices.
+
+Won't go into detail on the client implementation but the code is on GitHub.
+
+* Unit test base suite
+
+Should have a mix of tests that run against a mock device and a real device.
+
+Tests involving a mock device can always run.
+
+Running against a real device should be optional. May not be practical for automated testing.
+
+.code ble/blelib/base_test.go /START1 OMIT/,/END1 OMIT/
+
+* 
+
+.code ble/blelib/base_test.go /START2 OMIT/,/END2 OMIT/
+
+* Mock device base suite
+
+.code ble/blelib/service_test.go /START1 OMIT/,/END1 OMIT/
+
+* Mock device tests
+
+.code ble/blelib/service_test.go /START2 OMIT/,/END2 OMIT/
+
+* Real device base suite
+
+.code ble/blelib/service_test.go /START3 OMIT/,/END3 OMIT/
+
+* Real device tests
+
+.code ble/blelib/service_test.go /START4 OMIT/,/END4 OMIT/
+
+It's also possible to write common tests that run against real and mock devices with real LEDs and sensors. The difference would be how the test suite is initialized.
+
+* Demo part 2
+
+Run tests on Mac with mock device locally.
+
+Run tests on Mac with the Raspberry Pi acting as the real device.
+
+* Questions?

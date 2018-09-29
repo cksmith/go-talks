@@ -1,0 +1,51 @@
+Go 2 Draft Designs
+
+KW Go Developers Meetup
+October 9, 2018
+
+Daniel Lockhart
+Danny Roes
+Cameron Smith
+Dejero
+
+* Generics
+
+Ability to parameterize types and functions based on other types
+
+A long requested feature that has been investigated and had designs proposed since Go's first Open Source release
+
+After experiencing generics in C++ and Java, the designers decided to take the time to understand the topic well enough and design a good solution
+
+* Example
+
+From last year's talk on pipelines we had a function that merged channels:
+
+    func Merge(chans ...<-chan Message) <-chan Message
+
+This function needs to be rewritten each time you introduce a new message type
+
+Better:
+
+    func Merge(chans ...<-chan T) <-chan T
+
+where T can be any compatible type
+
+* Other examples
+
+    // Keys returns the keys from a map.
+    func Keys(m map[K]V) []K
+
+    // SortSlice sorts a slice of data using the given comparison function.
+    func SortSlice(data []T, less func(x, y T) bool)
+
+* Error handling
+
+Daniel here
+
+* Error values
+
+Danny here
+
+* Further reading
+
+.link https://blog.golang.org/go2draft Go 2 draft designs

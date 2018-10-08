@@ -38,6 +38,260 @@ where T can be any compatible type
     // SortSlice sorts a slice of data using the given comparison function.
     func SortSlice(data []T, less func(x, y T) bool)
 
+* Use cases
+
+Containers
+
+Generic algorithms
+
+Utility functions on slices, channels, maps
+
+* What about interfaces?
+
+Another approach for reusable code
+
+Used with generic containers in the current standard library
+
+Not type safe at compile time - all type checking happens at runtime via type assertions
+
+Require repetitive work by the programmer
+
+Russ Cox: "do you want slow programmers, slow compilers and bloated binaries, or slow execution times?"
+
+* Goals
+
+Enable the above use cases
+
+Require explicit constraints on type parameters so that we have a clear, enforced agreement between the caller and implementation
+
+Must be implementable at compile time by repeated specialized compilation (like C++) or at runtime so that the the decision on the strategy can be left to the compiler, same as any other optimization
+
+Must fit into the Go language while keeping it straightforward and understandable
+
+* Syntax
+
+The new syntax for generics introduces a type parameter list in a type or function declaration of the form (type <list of type names>). For example:
+
+    type List(type T) []T
+
+    func Keys(type K, V)(m map[K]V) []K
+
+Types are supplied using the ordinary call syntax:
+
+    var ints List(int)
+
+    keys := Keys(int, string)(map[int]string{1:"one", 2: "two"})
+
+Types may also be inferred in many cases, such as the above
+
+Instances of generic functions become regular functions:
+
+    f := Keys(int, string) // type func(map[int]string) []int
+    keys := f(map[int]string{1:"one", 2: "two"})
+
+* Contracts
+
+Contracts explicitly define the operations that the type(s) must support
+
+They have two purposes:
+
+- Validate the arguments supplied by the caller when a function (or type) with type parameters is instantiated
+
+- Validate what the function using the type parameters is allowed to do with them
+
+If a contract is not specified, only the operations supported by _any_ type are permitted
+
+* Benefits of contracts
+
+Allow caller and implementation to be far away from each other
+
+Implementation might be compiled into a package and instantiated later
+
+Explicit contracts avoid accidental changes when implementation is changed
+
+* Another benefit
+
+Contracts also enable the compiler to generate more helpful error messages
+
+In C++ the caller's types are checked against the implementation only by compiling the implementation
+- Errors tend to be long and complex as the error might be buried in layers of generic function calls
+- Errors also refer to implementation code that might be unfamiliar to the programmer
+
+Also, in C++ the implementation may call any method on a variable of a generic type, e.g. `v.String()`
+- The name is not resolved until the function is instantiated
+- This doesn't work for Go because Go resolves all names at the point they are seen
+
+* Contract syntax
+
+    contract Equal(t T) {
+        t == t
+    }
+
+It is essentially a function definition with a `contract` keyword and the body listing the set of possible operations and method calls
+
+In the type or function definition the contract name follows the type parameters
+
+    type Set(type T Equal) []T
+
+* Calling a method in a contract
+
+    contract stringer(x T) {
+        var s string = x.String()
+    }
+
+Contract requires that x has a method `String()` that returns a string
+
+    func Stringify(type T stringer)(s []T) (ret []string) {
+        for _, v := range s {
+            ret = append(ret, v.String())
+        }
+        return ret
+    }
+
+* Passing explicit types to a contract
+
+    contract convertible(_ To, f From) {
+        To(f)
+    }
+
+In the above contract, f must be convertible to type `To`
+
+    func FormatUnsigned(type T convertible(uint64, T))(v T) string {
+        return strconv.FormatUint(uint64(v), 10)
+    }
+
+* One contract per type or function
+
+Functions and types may have multiple type parameters, but they may only specify one contract
+
+    func Keys(type K, V Equal(K))(m map[K]V) []K
+
+Note that contracts don't need to use all of the type parameters as shown above
+
+Contracts may also be nested
+
+    contract PrintStringer(x T) {
+        stringer(x)
+        x.Print()
+    }
+
+* Values of type parameters are not boxed
+
+With interfaces, non-pointer values are _boxed_ when assigned to an interface variable
+
+This means that the value is stored on the stack or heap and a pointer to the value is assigned to the variable
+
+Parameterized types based on non-pointer value may be converted directly to their non-pointer types
+
+    package pair
+
+    type Pair(type firstT, secondT) struct {
+        f1 firstT
+        f2 secondT
+    }
+
+pair.Pair(int, string) is convertible to struct { f1 int; f2 string }
+
+* Reflection
+
+When a parameterized function or type is instantiated it becomes a regular function or type
+
+It can then be inspected by reflection in the ordinary way
+
+Because it's not possible for non-generic code to reference generic code without instantiating it, no extension to the reflection API is required
+
+* No types in method declarations
+
+    type Set(type T) ...
+
+    func (s Set(T)) Insert(type U)(value U) ... // not allowed
+
+This would require a very large number of Insert methods to be available at runtime, for all possible U types
+
+Required to determine if Set satisfies a particular interface or to allow reflection on Set's methods
+
+\...alternative is to give up on implementing generics at compile time
+
+* No type specialization
+
+Not possible to 'optimize' for particular types by providing special implementations
+
+Type assertions and type switches are possible on type parameters, though
+
+    func ReadByte(type T byteReader)(r T) (byte, error) {
+        if br, ok := r.(io.ByteReader); ok {
+            return br.ReadByte()
+        }
+        var b [1]byte
+        _, err := r.Read(b[:])
+        return b[0], err
+    }
+
+* Other limitations / non-goals
+
+No metaprogramming or higher level abstractions
+
+No operator overloading on generic containers (including range)
+
+No covariance or contravariance
+
+No parameterization on non-type values
+
+No adaptors for types that do not directly fulfill a contract
+
+No currying (specifying only some parameters)
+
+* Similarity to Java
+
+Java uses interfaces to specify type constraints
+
+    interface Equals<T> {
+        boolean equals(T o);
+    }
+
+    class Set<T implements Equals<T>> {
+        ...
+        public void add(T o) {
+            ...
+        }
+    }
+
+    Set<int> set;
+    set.add(1);
+
+* Type erasure
+
+Early versions of Java supported non-typed containers (based on Object)
+
+With generics, type parameterization for the legacy containers is now available but the compiler still converts back to the original untyped versions with extra runtime type checking
+
+It has the disadvantage that value types like boolean and int must be boxed (converted to Boolean and Integer)
+
+Also, dynamic type checking is not possible
+
+* Similarity to C++
+
+C++ implements generics (called "templates" in C++) entirely at compile time
+
+As of C++17 it does not yet have type constraints; however, this has been proposed for C++20 (called "concepts")
+
+Without constraints, error messages can be very complicated
+
+* Feedback
+
+Why use contracts and not interfaces like Java to avoid adding a new construct that is similar to an existing one?
+- Interfaces have no way of specifying operators
+
+Introduce a standard library package of special interfaces or functions representing the operators?
+
+Special syntax for specifying operators in interfaces?
+- This has the drawback that you could only use this syntax in type constraint interfaces, not regular interfaces
+
+Introduce a built-in library of contracts covering commonly use groups of types (numeric, comparable, orderable, etc.) to make code more readable
+
+Why use () and not <> for surrounding type parameters?
+- Keeps the grammar simple, avoids a symbol table during parsing
+
 * Error handling
 
 Daniel here

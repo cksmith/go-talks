@@ -471,7 +471,74 @@ This may be because the current error value system is also lacking consensus on 
 
 * Error values
 
-Danny here
+* Error values
+
+- Go doesn't have a standardized way to report or detect errors
+- In order to create scalable programs, errors need to be handled in a programatic fashion
+- Errors can't be output in a standardized format since each package is free to nest their errors in whatever format they prefer
+
+* Current functionality
+
+Errors are any type implementing the `error` interface. Currently, to detect and handle an error there are a few options:
+
+- Compare to a known error object
+- Use a type assertion or switch to determine the actual type
+- Do a substring search within the error string
+
+* Issues
+
+While a substring search is slow and potentially fragile, it's the only method that currently works if you have nested errors.
+
+Additionally, reporting/displaying errors relies on error strings being formatted in a logical fashion, or lots of work to format them.
+
+* Goals
+
+- Make error inspection easier and more robust
+- Allowing printing errors in a standard form, with additional levels of detail
+
+Also:
+
+- The solution must be compatible with existing code that is checking error equality or error types
+- Errors should be translatable using `golang.org/x/text/message`
+- Packages need to be able to define their own error types
+- Error generation must be efficient, and have a fixed cost
+
+* Draft
+Two drafts have been proposed: one to address error detection and one to address error formatting.
+
+* Error Detection Proposal
+
+- Errors can implement an optional interface with a function call to return the next error in the chain
+- The `errors` package includes two new functions:
+    // Is reports whether err or any of the errors in its chain is equal to target.
+    func Is(err, target error) bool
+
+    // As checks whether err or any of the errors in its chain is a value of type E.
+    // If so, it returns the discovered value of type E, with ok set to true.
+    // If not, it returns the zero value of type E, with ok set to false.
+    func As(type E)(err error) (e E, ok bool)
+
+(Note the As() function uses a contract)
+
+* Error Formatting Proposal
+
+- Errors can implement an optional interface to format error output:
+    type Formatter interface {
+        Format(p Printer) (next error)
+    }
+
+The `Printer` argument is provided by the package outputting the error, oftem `fmt`, and will contain `Print` and `Printf` functions to output the data. The printer also contains a  `Detail` function to determine if whether or not extra information should be printed.
+
+* Error format
+    foo:
+        file.go:123 main.main+0x123
+    --- bar(nameserver 139):
+        some detail only text
+        file.go:456
+    --- baz flopped:
+        file.go:789
+
+This draft proposes that using the `%+v` verb in `printf` would output errors in the detailed multiline format.
 
 * Further reading
 

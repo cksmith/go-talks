@@ -294,7 +294,180 @@ Why use () and not <> for surrounding type parameters?
 
 * Error handling
 
-Daniel here
+Most languages consider this a solved problem. For example, Java.
+
+    public bool doSomethingStupid() throws MyExpectedException {
+        if (0 == 0) { throw new MyExpectedException("herpaderp"); }
+        return false;
+    }
+    public String doItCarelessly() {
+        if (doSomethingStupid()) { return "Somehow this worked." }
+    }
+    public String doItCarefully() {
+        try { return doItCarelessly(); }
+        catch (MyExpectedException e) { e.printStackTrace(); }
+        finally { doAllTheCleanup(); }
+    }
+
+Exception based error handling should look familiar. This can also be called implicit error handling. The error is implicit because you can ignore the error, and your code looks the exact same as if the function never threw an Exception at all. 
+
+* Implicit error handling
+
+Pros
+    - Familiar to most developers 
+    - Much cleaner code in the common cases of ignoring the error or bubbling up the error.
+    - Try and catch keywords are more visible when they are used infrequently.
+
+
+Cons
+    - Exceptions are expensive. This can be a performance problem if a function throws errors repeatedly in a tight loop.
+    - Easy to miss. If you are modifying code that ignores an error, you may not think the function throws an error at all.
+
+* Explicit error handling
+
+However some newer languages (Rust,Go,Swift) have decided the cons of implicit error handling to be too much and decided to revamp the system. Discriminated unions, reinvented syntax or simple if else statements seem to be preferable.
+    
+    //Go
+    func OpenFile(src string) *File, error {
+        r, err := os.Open(src)
+        if err != nil {
+            return err
+        }
+    }
+
+    //Rust
+    fn open_file(src: string) Result<File,Error> {
+        return Ok(File::open(src)?);
+    }
+    
+* Explicit error handling
+
+Pros
+    - Easy to see therefore less surprises when modifying a function.
+    - Faster because there is not a need to unwind the stack each time, although this can be done in special cases(pkg/errors, panic/recover, Rust's unwrapping)
+
+
+Cons
+    - Verbose in Go's case
+    - Unfamiliar in Rust's case
+
+* Why change?
+
+A problem frequently brought up in Go's current error handling is that the verbosity can obscure real errors. Here's an example from the draft.
+
+    func CopyFile(src, dst string) error {
+        r, err := os.Open(src)
+        if err != nil {
+            return err
+        }
+        defer r.Close()
+        w, err := os.Create(dst)
+        if err != nil {
+            return err
+        }
+        defer w.Close()
+        if _, err := io.Copy(w, r); err != nil {
+            return err
+        }
+        if err := w.Close(); err != nil {
+            return err
+        }
+    }
+Can you spot the issues?
+
+* Answer
+
+The answer was that is io.Copy or w.Close failed, the partially written file would not be removed.
+Reducing the if err != nil noise is the central reason of the check/handle proposal.
+
+* Check/Handle
+The new code would look like this.
+
+    func CopyFile(src, dst string) error {
+        handle err {
+            return fmt.Errorf("copy %s %s: %v", src, dst, err)
+        }
+
+        r := check os.Open(src)
+        defer r.Close()
+
+        w := check os.Create(dst)
+        handle err {
+            w.Close()
+            os.Remove(dst) // (only if a check fails)
+        }
+
+        check io.Copy(w, r)
+        check w.Close()
+        return nil
+    }
+
+* Check keyword
+The check keyword essentially removes the last return value of a function if that function returns an error.
+It then checks if the err == nil, and if so executes the handle function above it.
+
+The Go 2 Draft explains it best
+
+Given a function fn where...
+
+    fn() -> v1, v2, ..., vN, err
+    v1, ..., vN := check <expr>
+
+it will expand to:
+
+    v1, ..., vN, err := fn()
+    if err != nil {
+        err = handler(err)
+        return err
+    }
+
+* Handle keyword
+
+The handle keyword is like defer in reverse. You can have multiple handle blocks inside of a function and they will execute according to the check that triggered them.
+Each handle will pass control to the previous handle until it encounters a handle block that contains a return statement.
+Check/Handle statements also only care about handle blocks that exist inside their current scope, for example.
+
+    func process(user string, files chan string) (n int, err error) {
+        handle err { return 0, fmt.Errorf("process: %v", err)  }      // handler A
+        for i := 0; i < 3; i++ {
+            handle err { err = fmt.Errorf("attempt %d: %v", i, err) } // handler B
+            handle err { err = moreWrapping(err) }                    // handler C
+
+            check do(something())  // check 1: handler chain C, B, A
+        }
+        check do(somethingElse())  // check 2: handler chain A
+    }
+
+* Default handler
+From the Go 2 draft:
+All functions whose last result is of type error begin with an implicit default handler. The default handler assigns the error argument to the last result and then returns, using the other results unchanged.
+    
+    //Go 1
+    func OpenFile(src string) *File, error {
+        r, err := os.Open(src)
+        if err != nil {
+            return err
+        }
+    }
+    //Rust
+    fn open_file(src: string) Result<File,Error> {
+        return Ok(File::open(src)?);
+    }
+    //Go 2 with default handler
+    func OpenFile(src string) *File, error {
+        r := check os.Open(src)
+        return r
+    }
+
+* Considerations
+The handler chaining seems like it could get complicated in bigger functions with multiple scopes. A common pitfall pointed out with exceptions is that you no longer can read the code easily top-down, you must jump around to various expection handlers. You can only jump around in a single function's scope which limits this common issue, but I wonder if handler chaining is necessary at all? 
+While I am personally a fan of reducing the if err != nil noise prevalent in Go, currently handle statements are missing a built in way to handle different types of errors.
+
+    try {}
+    catch (SpecificException e1) {}
+    catch (Exception everything) {}
+
+This may be because the current error value system is also lacking consensus on the matter. Luckily...
 
 * Error values
 

@@ -485,6 +485,27 @@ Errors are any type implementing the `error` interface. Currently, to detect and
 - Use a type assertion or switch to determine the actual type
 - Do a substring search within the error string
 
+* Examples
+    ReadError := errors.New("couldn't read")
+
+    type WriteError struct {
+        Err error
+        Path string
+    }
+    ...
+    if err == ReadError {
+        log.Println("Unable to read value")
+    }
+    ...
+    if writeErr, ok := err.(WriteError); ok {
+        log.Printf("Unable to write value to %s\n", writeErr.Path)
+    }
+    ...
+    if strings.Contains(err, "access denied") {
+        log.Print("Unable to access item")
+    }
+
+
 * Issues
 
 While a substring search is slow and potentially fragile, it's the only method that currently works if you have nested errors.
@@ -504,11 +525,11 @@ Also:
 - Error generation must be efficient, and have a fixed cost
 
 * Draft
-Two drafts have been proposed: one to address error detection and one to address error formatting.
+Two drafts have been proposed: one to address error inspection and one to address error formatting.
 
-* Error Detection Proposal
+* Error Inspection Proposal
 
-- Errors can implement an optional interface with a function call to return the next error in the chain
+- Errors can implement an optional Wrapper interface containing an Unwrap method to return the next error in the chain
 - The `errors` package includes two new functions:
     // Is reports whether err or any of the errors in its chain is equal to target.
     func Is(err, target error) bool
@@ -520,6 +541,19 @@ Two drafts have been proposed: one to address error detection and one to address
 
 (Note the As() function uses a contract)
 
+* Examples
+    //Formerly if err == ReadError
+    if errors.Is(err, ReadError) {
+        log.Println("Unable to read value")
+    }
+
+    ...
+
+    //Formerly if writeErr, ok := err.(WriteError); ok
+    if writeErr, ok := errors.As(WriteError)(err); ok {
+        log.Printf("Unable to write value to %s\n", writeErr.Path)
+    }
+
 * Error Formatting Proposal
 
 - Errors can implement an optional interface to format error output:
@@ -530,6 +564,12 @@ Two drafts have been proposed: one to address error detection and one to address
 The `Printer` argument is provided by the package outputting the error, oftem `fmt`, and will contain `Print` and `Printf` functions to output the data. The printer also contains a  `Detail` function to determine if whether or not extra information should be printed.
 
 * Error format
+Previously:
+
+    foo: bar(nameserver 139): baz flopped
+ 
+Proposed:
+
     foo:
         file.go:123 main.main+0x123
     --- bar(nameserver 139):
@@ -538,7 +578,7 @@ The `Printer` argument is provided by the package outputting the error, oftem `f
     --- baz flopped:
         file.go:789
 
-This draft proposes that using the `%+v` verb in `printf` would output errors in the detailed multiline format.
+This draft also proposes that using the `%+v` verb in `printf` would output errors in the detailed multiline format.
 
 * Further reading
 

@@ -1,0 +1,296 @@
+Go 2 Draft Designs - Continued
+
+KW Go Developers Meetup
+November 13, 2018
+
+Daniel Lockhart
+Danny Roes
+Dejero
+
+* Error handling
+
+Most languages consider this a solved problem. For example, Java.
+
+    public bool doSomethingStupid() throws MyExpectedException {
+        if (0 == 0) { throw new MyExpectedException("herpaderp"); }
+        return false;
+    }
+    public String doItCarelessly() {
+        if (doSomethingStupid()) { return "Somehow this worked." }
+    }
+    public String doItCarefully() {
+        try { return doItCarelessly(); }
+        catch (MyExpectedException e) { e.printStackTrace(); }
+        finally { doAllTheCleanup(); }
+    }
+
+Exception based error handling should look familiar. This can also be called implicit error handling. The error is implicit because you can ignore the error, and your code looks the exact same as if the function never threw an Exception at all. 
+
+* Implicit error handling
+
+Pros
+    - Familiar to most developers 
+    - Much cleaner code in the common cases of ignoring the error or bubbling up the error.
+    - Try and catch keywords are more visible when they are used infrequently.
+
+
+Cons
+    - Exceptions are expensive. This can be a performance problem if a function throws errors repeatedly in a tight loop.
+    - Easy to miss. If you are modifying code that ignores an error, you may not think the function throws an error at all.
+
+* Explicit error handling
+
+However some newer languages (Rust,Go,Swift) have decided the cons of implicit error handling to be too much. Discriminated unions or if else statements are chosen for simplicity and efficiency.
+    
+    //Go
+    func OpenFile(src string) *File, error {
+        r, err := os.Open(src)
+        if err != nil {
+            return err
+        }
+    }
+
+    //Rust
+    fn open_file(src: string) Result<File,Error> {
+        return Ok(File::open(src)?);
+    }
+    
+* Explicit error handling
+
+Pros
+    - Easy to see therefore less surprises when modifying a function.
+    - Faster because there is not a need to unwind the stack every single time.
+
+
+Cons
+    - Verbose in Go's case
+    - Harder to use in Rust's case
+
+* Why change?
+
+A problem frequently brought up in Go's current error handling is that the verbosity can obscure real errors. Here's an example from the draft.
+
+    func CopyFile(src, dst string) error {
+        r, err := os.Open(src)
+        if err != nil {
+            return err
+        }
+        defer r.Close()
+        w, err := os.Create(dst)
+        if err != nil {
+            return err
+        }
+        defer w.Close()
+        if _, err := io.Copy(w, r); err != nil {
+            return err
+        }
+        if err := w.Close(); err != nil {
+            return err
+        }
+    }
+Can you spot the issues?
+
+* Answer
+
+The answer is that if io.Copy or w.Close failed, the partially written file would not be removed.
+Reducing the if err != nil noise is the central reason of the check/handle proposal.
+
+* Check/Handle
+The new code would look like this.
+
+    func CopyFile(src, dst string) error {
+        handle err {
+            return fmt.Errorf("copy %s %s: %v", src, dst, err)
+        }
+
+        r := check os.Open(src)
+        defer r.Close()
+
+        w := check os.Create(dst)
+        handle err {
+            w.Close()
+            os.Remove(dst) // (only if a check fails)
+        }
+
+        check io.Copy(w, r)
+        check w.Close()
+        return nil
+    }
+
+* Check keyword
+The check keyword essentially removes the last return value of a function if that function returns an error.
+It then checks if the err == nil, and if so executes the handle function above it.
+
+Given a function fn where...
+
+    fn() -> v1, v2, ..., vN, err
+    v1, ..., vN := check fn()
+
+it will expand to:
+
+    v1, ..., vN, err := fn()
+    if err != nil {
+        err = handler(err)
+        return err
+    }
+
+* Handle keyword
+
+The handle keyword is like defer in reverse. You can have multiple handle blocks inside of a function and they will execute according to the check that triggered them.
+Each handle will pass control to the previous handle until it encounters a handle block that contains a return statement.
+Check/Handle statements also only care about handle blocks that exist inside their current scope, for example.
+
+    func process(user string, files chan string) (n int, err error) {
+        handle err { return 0, fmt.Errorf("process: %v", err)  }      // handler A
+        for i := 0; i < 3; i++ {
+            handle err { err = fmt.Errorf("attempt %d: %v", i, err) } // handler B
+            handle err { err = moreWrapping(err) }                    // handler C
+
+            check do(something())  // check 1: handler chain C, B, A
+        }
+        check do(somethingElse())  // check 2: handler chain A
+    }
+
+* Default handler
+From the Go 2 draft:
+All functions whose last result is of type error begin with an implicit default handler. The default handler assigns the error argument to the last result and then returns, using the other results unchanged.
+    
+    //Go 1
+    func OpenFile(src string) *File, error {
+        r, err := os.Open(src)
+        if err != nil {
+            return err
+        }
+    }
+    //Rust
+    fn open_file(src: string) Result<File,Error> {
+        return Ok(File::open(src)?);
+    }
+    //Go 2 with default handler
+    func OpenFile(src string) *File, error {
+        r := check os.Open(src)
+        return r
+    }
+
+* Considerations
+The handler chaining seems like it could get complicated in bigger functions with multiple scopes. A common pitfall pointed out with exceptions is that you no longer can read the code easily top-down, you must jump around to various expection handlers. You can only jump around in a single function's scope which limits this common issue, but I wonder if handler chaining is necessary at all? 
+While I am personally a fan of reducing the if err != nil noise prevalent in Go, currently handle statements are missing a built in way to handle different types of errors.
+
+    try {}
+    catch (SpecificException e1) {}
+    catch (Exception everything) {}
+
+This may be because the current error value system is also lacking consensus on the matter. Luckily...
+
+* Error values
+
+- Go doesn't have a standardized way to report or detect errors
+- In order to create scalable programs, errors need to be handled in a programatic fashion
+- Errors can't be output in a standardized format since each package is free to nest their errors in whatever format they prefer
+
+* Current functionality
+
+Errors are any type implementing the `error` interface. Currently, to detect and handle an error there are a few options:
+
+- Compare to a known error object
+- Use a type assertion or switch to determine the actual type
+- Do a substring search within the error string
+
+* Examples
+    ReadError := errors.New("couldn't read")
+
+    type WriteError struct {
+        Err error
+        Path string
+    }
+    ...
+    if err == ReadError {
+        log.Println("Unable to read value")
+    }
+    ...
+    if writeErr, ok := err.(WriteError); ok {
+        log.Printf("Unable to write value to %s\n", writeErr.Path)
+    }
+    ...
+    if strings.Contains(err, "access denied") {
+        log.Print("Unable to access item")
+    }
+
+
+* Issues
+
+While a substring search is slow and potentially fragile, it's the only method that currently works if you have nested errors.
+
+Additionally, reporting/displaying errors relies on error strings being formatted in a logical fashion, or lots of work to format them.
+
+* Goals
+
+- Make error inspection easier and more robust
+- Allowing printing errors in a standard form, with additional levels of detail
+
+Also:
+
+- The solution must be compatible with existing code that is checking error equality or error types
+- Errors should be translatable using `golang.org/x/text/message`
+- Packages need to be able to define their own error types
+- Error generation must be efficient, and have a fixed cost
+
+* Draft
+Two drafts have been proposed: one to address error inspection and one to address error formatting.
+
+* Error Inspection Proposal
+
+- Errors can implement an optional Wrapper interface containing an Unwrap method to return the next error in the chain
+- The `errors` package includes two new functions:
+    // Is reports whether err or any of the errors in its chain is equal to target.
+    func Is(err, target error) bool
+
+    // As checks whether err or any of the errors in its chain is a value of type E.
+    // If so, it returns the discovered value of type E, with ok set to true.
+    // If not, it returns the zero value of type E, with ok set to false.
+    func As(type E)(err error) (e E, ok bool)
+
+(Note the As() function uses a contract)
+
+* Examples
+    //Formerly if err == ReadError
+    if errors.Is(err, ReadError) {
+        log.Println("Unable to read value")
+    }
+
+    ...
+
+    //Formerly if writeErr, ok := err.(WriteError); ok
+    if writeErr, ok := errors.As(WriteError)(err); ok {
+        log.Printf("Unable to write value to %s\n", writeErr.Path)
+    }
+
+* Error Formatting Proposal
+
+- Errors can implement an optional interface to format error output:
+    type Formatter interface {
+        Format(p Printer) (next error)
+    }
+
+The `Printer` argument is provided by the package outputting the error, oftem `fmt`, and will contain `Print` and `Printf` functions to output the data. The printer also contains a  `Detail` function to determine if whether or not extra information should be printed.
+
+* Error format
+Previously:
+
+    foo: bar(nameserver 139): baz flopped
+ 
+Proposed:
+
+    foo:
+        file.go:123 main.main+0x123
+    --- bar(nameserver 139):
+        some detail only text
+        file.go:456
+    --- baz flopped:
+        file.go:789
+
+This draft also proposes that using the `%+v` verb in `printf` would output errors in the detailed multiline format.
+
+* Further reading
+
+.link https://blog.golang.org/go2draft Go 2 draft designs
